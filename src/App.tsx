@@ -315,69 +315,66 @@ export default function App() {
 
   if (showSplash) {
     return (
-      <div className="h-screen w-screen bg-[#05070a] text-white flex flex-col relative overflow-hidden font-sans select-none">
+      <div className="min-h-screen w-screen bg-[#05070a] text-white flex flex-col relative overflow-hidden font-sans select-none">
         {/* Background Grid/Fx */}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(0,255,136,0.1),transparent_70%)] opacity-50" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_100%,rgba(0,255,136,0.08),transparent_70%)] opacity-60 pointer-events-none" />
         <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10 pointer-events-none" />
 
         {/* Content Container */}
-        <div className="relative z-10 flex flex-col h-full max-w-7xl mx-auto px-8 md:px-16 pt-12 md:pt-24 pb-12">
+        <div className="relative z-10 flex flex-col flex-1 max-w-7xl mx-auto px-6 md:px-16 py-8 md:py-24">
           
           {/* Brand Header */}
-          <div className="flex items-center gap-4 mb-16 animate-in fade-in slide-in-from-top-10 duration-700">
-            <div className="relative w-14 h-14 bg-bull/20 rounded-xl flex items-center justify-center border border-bull/40 shadow-[0_0_20px_rgba(0,255,136,0.3)]">
-              <div className="absolute inset-0 rounded-xl bg-bull blur-lg opacity-30" />
-              <div className="relative text-bull border-4 border-bull rounded-full p-1 flex items-center justify-center w-10 h-10">
-                <span className="text-xl font-black italic">Ω</span>
-                <TrendingUp size={12} className="absolute -top-1 -right-1 bg-warning text-black rounded-full p-0.5" />
+          <div className="flex items-center gap-3 md:gap-4 mb-20 md:mb-24 animate-in fade-in slide-in-from-top-10 duration-700">
+            <div className="relative w-10 h-10 md:w-14 md:h-14 bg-bull/10 rounded-xl flex items-center justify-center border border-bull/30">
+              <div className="relative text-bull border-2 md:border-4 border-bull rounded-full p-1 flex items-center justify-center w-7 h-7 md:w-10 md:h-10">
+                <span className="text-sm md:text-xl font-black italic">Ω</span>
               </div>
             </div>
             <div>
-              <h2 className="text-lg font-black tracking-[0.3em] text-white/90 italic uppercase">BTCUSD <span className="text-bull underline decoration-bull/30 decoration-wavy">SIGNAL OMEGA</span></h2>
+              <h2 className="text-[10px] md:text-lg font-black tracking-[0.2em] md:tracking-[0.3em] text-white/90 italic uppercase">BTCUSD <span className="text-bull">SIGNAL OMEGA</span></h2>
               <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-bull animate-pulse" />
-                <span className="text-[10px] font-bold text-bull/80 tracking-widest uppercase">Live Scanning • BTCUSDT • Binance</span>
+                <span className="w-1 h-1 md:w-1.5 md:h-1.5 rounded-full bg-bull animate-pulse" />
+                <span className="text-[7px] md:text-[10px] font-bold text-bull/60 tracking-widest uppercase">Live Scanning • Binance</span>
               </div>
             </div>
           </div>
 
           {/* Hero Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 flex-1">
-            <div className="flex flex-col justify-center animate-in fade-in slide-in-from-left-10 duration-1000 delay-200">
-              <h1 className="text-6xl md:text-8xl font-black italic tracking-tighter leading-[0.8] mb-6">
+          <div className="flex-1 flex flex-col lg:flex-row lg:items-center gap-8 md:gap-12">
+            <div className="flex flex-col animate-in fade-in slide-in-from-left-10 duration-1000 delay-200">
+              <h1 className="text-4xl md:text-8xl font-black italic tracking-tighter leading-[0.85] mb-16 md:mb-20">
                 PREMIUM <br />
-                <span className="text-bull text-glow">BTC SIGNAL</span>
+                <span className="text-bull text-glow uppercase">BTC SIGNAL</span>
               </h1>
-              <p className="text-xl text-slate-400 font-medium mb-12 max-w-md">Akurat. Cepat. Terpercaya. Dashboard profesional untuk scalping & day trading Bitcoin.</p>
 
-              {/* Feature List */}
-              <div className="space-y-6 mb-12">
-                {[
-                  { icon: <Zap className="text-bull" size={20} />, title: "Real-Time Signal", desc: "Update market secara real-time" },
-                  { icon: <Target className="text-bull" size={20} />, title: "High Accuracy", desc: "Tingkat akurasi tinggi hingga 80%+" },
-                  { icon: <ShieldCheck className="text-bull" size={20} />, title: "Secure & Reliable", desc: "Validasi sinyal dengan AI & Logic" }
-                ].map((f, i) => (
-                  <div key={i} className="flex items-start gap-4">
-                    <div className="p-3 bg-white/5 rounded-lg border border-white/10">{f.icon}</div>
-                    <div>
-                      <h4 className="font-bold text-white tracking-wide">{f.title}</h4>
-                      <p className="text-xs text-slate-500">{f.desc}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* CTA */}
+              {/* CTA - Moved Up */}
               <button 
                 onClick={() => {
                   setShowSplash(false);
                   speakMessage("Welcome to BTC USD Signal Omega. Terminal system is now active.");
                 }}
-                className="group relative w-full md:w-fit px-12 py-5 bg-bull hover:bg-bull/90 text-black font-black text-xl italic tracking-tighter rounded-xl transition-all active:scale-95 overflow-hidden shadow-[0_10px_40px_rgba(0,255,136,0.3)]"
+                className="group relative w-full md:w-fit px-8 md:px-12 py-5 border-2 border-bull text-bull hover:bg-bull hover:text-black font-black text-lg md:text-xl italic tracking-widest rounded-xl transition-all active:scale-95 overflow-hidden shadow-[0_0_30px_rgba(0,255,136,0.2)] mb-20 md:mb-24"
               >
-                <div className="absolute inset-0 bg-white/30 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700 skew-x-12" />
+                <div className="absolute inset-0 bg-bull/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                 ENTER TERMINAL
               </button>
+
+              {/* Feature List - Moved Down */}
+              <div className="space-y-6 md:space-y-8">
+                {[
+                  { icon: <Zap className="text-bull" size={14} />, title: "Real-Time Signal", desc: "Market update real-time" },
+                  { icon: <Target className="text-bull" size={14} />, title: "High Accuracy", desc: "Akurasi 80%+" },
+                  { icon: <ShieldCheck className="text-bull" size={14} />, title: "Secure & Reliable", desc: "Validasi AI & Logic" }
+                ].map((f, i) => (
+                  <div key={i} className="flex items-center gap-5">
+                    <div className="p-2.5 bg-bull/10 rounded-lg border border-bull/20 shadow-[0_0_15px_rgba(0,255,136,0.1)]">{f.icon}</div>
+                    <div>
+                      <h4 className="font-bold text-white text-xs md:text-base tracking-wide leading-none">{f.title}</h4>
+                      <p className="text-[9px] md:text-xs text-slate-500 mt-1.5">{f.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Visual Column */}
@@ -421,11 +418,9 @@ export default function App() {
           </div>
 
           {/* Footer Bar */}
-          <div className="border-t border-white/5 pt-12 mt-12 flex flex-wrap gap-12 items-center justify-center md:justify-start grayscale opacity-50">
-            <div className="flex items-center gap-2 font-bold text-sm italic"><TrendingUp size={16}/> Better Analysis</div>
-            <div className="flex items-center gap-2 font-bold text-sm italic"><Zap size={16}/> Better Decisions</div>
-            <div className="flex items-center gap-2 font-bold text-sm italic"><Target size={16}/> Better Results</div>
-            <div className="ml-auto flex items-center gap-2 font-bold text-sm italic text-bull grayscale-0 opacity-100 uppercase tracking-widest">Trading Smarter, Not Harder</div>
+          <div className="border-t border-white/5 pt-6 md:pt-12 mt-auto md:mt-12 flex flex-wrap gap-6 md:gap-12 items-center justify-center md:justify-start grayscale opacity-40 text-[9px] md:text-sm">
+            <div className="flex items-center gap-2 font-bold italic"><Zap size={12} className="text-bull"/> BETTER ANALYSIS</div>
+            <div className="flex items-center gap-2 font-bold italic"><Target size={12} className="text-bull"/> BETTER DECISIONS</div>
           </div>
         </div>
       </div>
