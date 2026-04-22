@@ -57,3 +57,29 @@
 .view-container iframe {
   @apply rounded-lg opacity-90 grayscale-[20%] contrast-[110%];
 }
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes bounce-slow {
+  0%, 100% { transform: translateY(-5%); }
+  50% { transform: translateY(5%); }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 20s linear infinite;
+}
+
+.animate-bounce-slow {
+  animation: bounce-slow 4s ease-in-out infinite;
+}
+
+.animate-bounce-slower {
+  animation: bounce-slow 6s ease-in-out infinite;
+}
+
+.text-glow {
+  text-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
+}
