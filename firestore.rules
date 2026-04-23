@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Jalur Sinyal & Laporan MT5
+    match /signals/{document=**} { allow read, write: if true; }
+    match /accounts/{document=**} { allow read, write: if true; }
+    match /positions/{document=**} { allow read, write: if true; }
+    match /history/{document=**} { allow read, write: if true; }
+    
+    // Default tetap deny untuk yang lain
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

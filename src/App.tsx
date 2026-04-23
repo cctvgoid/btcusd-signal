@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { doc, setDoc, serverTimestamp, collection, onSnapshot, query, orderBy, limit } from "firebase/firestore";
+import { db } from "./lib/firebase";
 import { 
   BarChart3, 
   TrendingUp, 
@@ -17,7 +19,11 @@ import {
   Target,
   ShieldCheck,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Wallet,
+  History as HistoryIcon,
+  XCircle,
+  Clock
 } from "lucide-react";
 
 // TradingView widget script loader
@@ -85,6 +91,9 @@ interface TimeframeData {
   rsi: number;
   rsiState: string;
   structure: string;
+  ema20: number;
+  ema50: number;
+  distFromEMA20: number;
 }
 
 interface MarketAnalysis {
@@ -100,6 +109,8 @@ interface MarketAnalysis {
     tp2: string;
     rr: string;
   };
+  entryTiming: "GOOD" | "WAIT_PULLBACK" | "WAIT_BREAKOUT";
+  timingNote: string;
   reasoning: string;
   checkpoints: { label: string; checked: boolean }[];
 }
@@ -112,9 +123,97 @@ export default function App() {
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [liveIndicators, setLiveIndicators] = useState<TimeframeData[] | null>(null);
   const [highlightTrigger, setHighlightTrigger] = useState(0); // State for targeting flash
-  const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL">("SIGNAL");
+  const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL" | "ACCOUNT">("SIGNAL");
+  const [tradeLoading, setTradeLoading] = useState(false);
+  
+  // Real-time Account Data
+  const [accountData, setAccountData] = useState<any>(null);
+  const [positions, setPositions] = useState<any[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    // Listen for Account Info
+    const unsubAccount = onSnapshot(doc(db, "accounts", "LIVE_ACCOUNT"), (doc) => {
+      if (doc.exists()) setAccountData(doc.data());
+    });
+
+    // Listen for Open Positions
+    const unsubPositions = onSnapshot(collection(db, "positions"), (snapshot) => {
+      setPositions(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // Listen for History
+    const qHistory = query(collection(db, "history"), orderBy("closeTime", "desc"), limit(10));
+    const unsubHistory = onSnapshot(qHistory, (snapshot) => {
+      setHistory(snapshot.docs.map(d => d.data()));
+    });
+
+    return () => { unsubAccount(); unsubPositions(); unsubHistory(); };
+  }, []);
   
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
+
+  // AUTO-BOOTSTRAP: Siapkan Kotak Sinyal biar MT5 gak 404
+  useEffect(() => {
+    if (!showSplash) {
+      const bootstrap = async () => {
+        try {
+          await setDoc(doc(db, "signals", "LIVE_SIGNAL"), {
+            status: "ready",
+            side: "WAIT",
+            timestamp: serverTimestamp(),
+            note: "System Initialized"
+          }, { merge: true });
+          console.log("✅ CLOUD BRIDGE INITIALIZED");
+        } catch (e) {
+          console.error("Bootstrap error:", e);
+        }
+      };
+      bootstrap();
+    }
+  }, [showSplash]);
+
+  const closeTrade = async (ticket: string) => {
+    setTradeLoading(true);
+    try {
+      await setDoc(doc(db, "signals", "LIVE_SIGNAL"), {
+        side: "CLOSE",
+        ticket: ticket,
+        timestamp: serverTimestamp(),
+        status: "pending"
+      });
+      alert("🛑 CLOSE REQUEST SENT: MetaTrader sedang memproses penutupan tiket #" + ticket);
+    } catch (err) {
+      alert("❌ Gagal mengirim perintah tutup.");
+    } finally {
+      setTradeLoading(false);
+    }
+  };
+
+  const executeTrade = async () => {
+    if (!analysis?.signal || analysis.signal.type === 'WAIT') return;
+    
+    setTradeLoading(true);
+    try {
+      // JURUS PAMUNGKAS: Taruh di satu kotak tetap agar MT5 gampang ambilnya
+      await setDoc(doc(db, "signals", "LIVE_SIGNAL"), {
+        side: analysis.signal.type,
+        symbol: "BTCUSD",
+        volume: 0.01,
+        sl: analysis.signal.sl,
+        tp: analysis.signal.tp1,
+        timestamp: serverTimestamp(),
+        status: "pending"
+      });
+      
+      alert("🚀 CLOUD SIGNAL READY! Silakan cek MT5 Bapak sekarang.");
+    } catch (err: any) {
+      console.error("Firebase Error:", err);
+      alert("⚠️ CLOUD ERROR: Gagal mengirim sinyal ke Google Bridge. Cek koneksi internet Bapak.");
+    } finally {
+      setTradeLoading(false);
+    }
+  };
 
   const enterTerminal = () => {
     setShowSplash(false);
@@ -181,6 +280,16 @@ const calculateRSI = (closes: number[], period: number = 14) => {
   return 100 - (100 / (1 + rs));
 };
 
+const calculateEMA = (closes: number[], period: number) => {
+  if (closes.length < period) return closes[closes.length - 1];
+  const multiplier = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) {
+    ema = (closes[i] - ema) * multiplier + ema;
+  }
+  return ema;
+};
+
 const getStructure = (closes: number[]) => {
   if (closes.length < 10) return "Ranging";
   const last5 = closes.slice(-5);
@@ -244,6 +353,11 @@ const getStructure = (closes: number[]) => {
             const closes = klines.map((k: any) => parseFloat(k[4]));
             const rsi = Math.round(calculateRSI(closes, 14)); // This will now use 150 data points for precise Wilder's smoothing
             
+            const ema20 = calculateEMA(closes, 20);
+            const ema50 = calculateEMA(closes, 50);
+            const lastClose = closes[closes.length - 1];
+            const distFromEMA20 = ((lastClose - ema20) / ema20) * 100; // % jarak dari EMA20
+
             // For trend mapping, extract only the last 50 periods
             const recentCloses = closes.slice(-50);
             const first = recentCloses[0];
@@ -258,7 +372,10 @@ const getStructure = (closes: number[]) => {
               trend: trendStr,
               rsi,
               rsiState,
-              structure
+              structure,
+              ema20,
+              ema50,
+              distFromEMA20
             });
             
             if (interval === '15m') {
@@ -361,6 +478,44 @@ const getStructure = (closes: number[]) => {
         }
       }
 
+      // TIMING ENTRY FILTER
+      let entryTiming: "GOOD" | "WAIT_PULLBACK" | "WAIT_BREAKOUT" = "GOOD";
+      let timingNote = "Stabilizing market...";
+
+      if (signalType === "BUY" && m15 && h1) {
+        const priceTooHigh = m15.distFromEMA20 > 1.5; // Harga udah 1.5% di atas EMA20 M15
+        const ema20AboveEma50 = m15.ema20 > m15.ema50; // Trend EMA konfirmasi
+        const rsiNotOverbought = m15.rsi < 65;
+
+        if (priceTooHigh) {
+          entryTiming = "WAIT_PULLBACK";
+          timingNote = `⏳ Harga terlalu jauh dari EMA20 M15 (+${m15.distFromEMA20.toFixed(1)}%). Tunggu pullback ke area ${m15.ema20.toFixed(1)} sebelum entry.`;
+        } else if (!ema20AboveEma50) {
+          entryTiming = "WAIT_BREAKOUT";
+          timingNote = `⏳ EMA20 M15 belum di atas EMA50. Tunggu konfirmasi breakout structure dulu.`;
+        } else if (rsiNotOverbought && !priceTooHigh) {
+          entryTiming = "GOOD";
+          timingNote = `✅ Timing entry bagus. Harga dekat EMA20 M15 (${m15.distFromEMA20.toFixed(1)}%). RSI sehat di ${m15.rsi}.`;
+        }
+      }
+
+      if (signalType === "SELL" && m15 && h1) {
+        const priceTooLow = m15.distFromEMA20 < -1.5; // Harga udah 1.5% di bawah EMA20 M15
+        const ema20BelowEma50 = m15.ema20 < m15.ema50;
+        const rsiNotOversold = m15.rsi > 35;
+
+        if (priceTooLow) {
+          entryTiming = "WAIT_PULLBACK";
+          timingNote = `⏳ Harga terlalu jauh di bawah EMA20 M15 (${m15.distFromEMA20.toFixed(1)}%). Tunggu pullback ke area ${m15.ema20.toFixed(1)} sebelum entry.`;
+        } else if (!ema20BelowEma50) {
+          entryTiming = "WAIT_BREAKOUT";
+          timingNote = `⏳ EMA20 M15 belum di bawah EMA50. Tunggu konfirmasi breakdown structure dulu.`;
+        } else if (rsiNotOversold && !priceTooLow) {
+          entryTiming = "GOOD";
+          timingNote = `✅ Timing entry bagus. Harga dekat EMA20 M15 (${m15.distFromEMA20.toFixed(1)}%). RSI sehat di ${m15.rsi}.`;
+        }
+      }
+
       // Hitung ATR dari H1 klines
       const calcATR = (klines: any[], period = 14) => {
         if (!klines || klines.length < period + 1) return currentPrice * 0.005;
@@ -396,11 +551,13 @@ const getStructure = (closes: number[]) => {
           tier: tier,
           confidence: calcConf, 
           zone: currentPrice.toFixed(1), // Entry at market price logic
-          sl: parseFloat(slRaw),
-          tp1: parseFloat(tp1Raw),
-          tp2: parseFloat(tp2Raw),
+          sl: parseFloat(slRaw).toFixed(1),
+          tp1: parseFloat(tp1Raw).toFixed(1),
+          tp2: parseFloat(tp2Raw).toFixed(1),
           rr: tier === 3 ? "1:1" : "1:2"
         },
+        entryTiming: entryTiming,
+        timingNote: timingNote,
         reasoning: reasoningTxt,
         checkpoints: [
           { label: "Data Binance Validated", checked: true },
@@ -442,6 +599,11 @@ const getStructure = (closes: number[]) => {
             const closes = klines.map((k: any) => parseFloat(k[4]));
             const rsi = Math.round(calculateRSI(closes, 14));
             
+            const ema20 = calculateEMA(closes, 20);
+            const ema50 = calculateEMA(closes, 50);
+            const lastClose = closes[closes.length - 1];
+            const distFromEMA20 = ((lastClose - ema20) / ema20) * 100; // % jarak dari EMA20
+
             const recentCloses = closes.slice(-50);
             const first = recentCloses[0];
             const last = recentCloses[recentCloses.length - 1];
@@ -450,7 +612,7 @@ const getStructure = (closes: number[]) => {
             const rsiState = rsi > 70 ? "Overbought" : rsi < 30 ? "Oversold" : rsi > 55 ? "Bullish" : rsi < 45 ? "Bearish" : "Neutral";
             const structure = getStructure(recentCloses);
             
-            realTimeframes.push({ timeframe: tfLabel, trend: trendStr, rsi, rsiState, structure });
+            realTimeframes.push({ timeframe: tfLabel, trend: trendStr, rsi, rsiState, structure, ema20, ema50, distFromEMA20 });
           }
         };
 
@@ -669,12 +831,15 @@ const getStructure = (closes: number[]) => {
         </div>
 
         {/* Dynamic Content Area */}
-        <div className="flex-1 grid grid-cols-12 overflow-hidden relative">
-            {/* Left: Chart Area */}
-            <div className={`
-              ${mobileActiveTab === 'CHART' ? 'col-span-12 flex' : 'hidden'} 
-              lg:flex lg:col-span-8 border-r border-trading-border flex-col relative h-full w-full
-            `}>
+        <div className="flex-1 overflow-hidden relative">
+            {/* 1. TRADING SCREEN (CHART + SIGNAL) */}
+            <div className={`grid grid-cols-12 h-full w-full ${mobileActiveTab === 'ACCOUNT' ? 'hidden' : 'grid'}`}>
+                {/* Left: Chart Area */}
+                <div className={`
+                  ${mobileActiveTab === 'CHART' ? 'col-span-12 flex' : 'hidden'} 
+                  lg:flex lg:col-span-8 border-r border-trading-border flex-col relative h-full w-full
+                `}>
+                  {/* ... chart content ... */}
               {/* Drawing Toolbar Toggle - Yellow Exness Style */}
               <button 
                 onClick={() => setShowChartToolbar(!showChartToolbar)}
@@ -687,40 +852,51 @@ const getStructure = (closes: number[]) => {
               {/* TRADING VIEW CHART CONTAINER */}
               <div className="flex-1 w-full bg-trading-bg relative overflow-hidden"> 
                 <div id="tv_chart_container" className="h-full w-full" />
-                
-                {/* Visual Target Lock Highlight Overlay (TV-Style Horizontal Ray) */}
+
+                {/* HUD TARGET LOCK OVERLAY (The "Laser") */}
                 <AnimatePresence>
-                  {analysis?.signal && (
+                  {analysis?.signal && analysis.signal.type !== "WAIT" && (
                     <motion.div
-                      key={highlightTrigger} // Use highlight trigger here just to fire the re-entry animation when updated
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ duration: 0.3 }}
-                      className="absolute left-0 w-full top-[30%] z-[60] flex items-center pointer-events-none drop-shadow-md"
+                      key={highlightTrigger}
+                      initial={{ opacity: 0, scaleY: 0 }}
+                      animate={{ opacity: 1, scaleY: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ type: "spring", stiffness: 100, damping: 20 }}
+                      className="absolute left-0 w-full top-[40%] z-[60] flex items-center pointer-events-none drop-shadow-[0_0_15px_rgba(0,255,136,0.5)]"
                     >
-                      {/* Text Label on the Left */}
-                      <div className="pl-4 pr-3 text-[10px] md:text-xs uppercase font-bold tracking-widest drop-shadow-lg whitespace-nowrap bg-trading-bg/50 backdrop-blur-sm" 
-                           style={{ color: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}>
-                        {analysis.signal.type} ZONE
+                      {/* Left Target Badge */}
+                      <div className="flex flex-col items-start ml-2 md:ml-4">
+                        <div className="flex items-center gap-1">
+                          <div className={`w-1 h-1 rounded-full animate-ping ${analysis.signal.type === 'SELL' ? 'bg-bear' : 'bg-bull'}`} />
+                          <span className={`text-[9px] md:text-[10px] font-black tracking-[0.2em] uppercase px-1.5 py-0.5 rounded-sm bg-black/60 backdrop-blur-md border ${analysis.signal.type === 'SELL' ? 'text-bear border-bear/40' : 'text-bull border-bull/40'}`}>
+                            {analysis.signal.type} LOCK
+                          </span>
+                        </div>
+                        <div className="text-[8px] font-mono text-white/40 mt-1 uppercase tracking-tighter">AI Target Acquisition</div>
                       </div>
 
-                      {/* Connecting Horizontal Line (Dotted) */}
-                      <div className="flex-1 h-0 border-b-2 border-dotted opacity-60" 
-                           style={{ borderColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }} />
+                      {/* THE LASER LINE (Glow Line) */}
+                      <div className="flex-1 h-[1px] relative mx-2">
+                         {/* Centered Target Crosshair */}
+                         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 border border-white/20 rounded-full flex items-center justify-center">
+                            <div className={`w-1 h-1 rounded-full ${analysis.signal.type === 'SELL' ? 'bg-bear' : 'bg-bull'}`} />
+                         </div>
+                         {/* The actual laser line */}
+                         <div className={`w-full h-full opacity-60 shadow-[0_0_10px] ${analysis.signal.type === 'SELL' ? 'bg-bear shadow-bear' : 'bg-bull shadow-bull'}`} />
+                      </div>
 
-                      {/* True TV Style Tag Polygon on the Right Edge */}
-                      <div className="flex items-center">
-                        {/* Arrow Pointing Left */}
+                      {/* Right Price Tag (Polygon Style) */}
+                      <div className="mr-0 flex items-center">
                         <div 
-                           className="w-0 h-0 border-y-[12px] border-y-transparent border-r-[8px]" 
-                           style={{ borderRightColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }} 
+                          className="w-0 h-0 border-y-[12px] border-y-transparent border-r-[8px]" 
+                          style={{ borderRightColor: analysis.signal.type === 'SELL' ? '#ff4466' : '#00ff88' }} 
                         />
-                        {/* Ticker Tag Body (Exactly matching TV dimensions) */}
                         <div 
-                           className="text-white font-mono text-[11px] font-semibold h-[24px] px-1.5 flex items-center justify-center rounded-sm rounded-l-none"
-                           style={{ backgroundColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}
+                          className="h-[24px] px-2 flex flex-col items-center justify-center rounded-sm rounded-l-none bg-black/80 border-r border-y"
+                          style={{ borderColor: analysis.signal.type === 'SELL' ? '#ff4466' : '#00ff88' }}
                         >
-                           {analysis.signal.zone}
+                          <span className="text-white font-mono text-[11px] font-black leading-none">{analysis.signal.zone}</span>
+                          <span className="text-[7px] text-white/60 font-bold tracking-tighter leading-none mt-0.5">ZONE</span>
                         </div>
                       </div>
                     </motion.div>
@@ -794,6 +970,32 @@ const getStructure = (closes: number[]) => {
                     <p className={`text-sm font-mono font-black ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>{analysis?.signal?.tp2 || "---"}</p>
                   </div>
                 </div>
+
+                {/* BROKER EXECUTION BUTTON */}
+                <div className="mt-6 border-t border-trading-border pt-6">
+                  <button
+                    onClick={executeTrade}
+                    disabled={tradeLoading || !analysis?.signal}
+                    className={`w-full py-4 rounded-md font-black italic tracking-widest text-sm flex items-center justify-center gap-3 transition-all active:scale-95 shadow-xl ${
+                      analysis?.signal?.type === 'BUY' ? 'bg-bull text-black shadow-bull/20 hover:bg-bull/90' : 
+                      analysis?.signal?.type === 'SELL' ? 'bg-bear text-white shadow-bear/20 hover:bg-bear/90' : 
+                      'bg-blue-600 text-white shadow-blue-500/20 hover:bg-blue-500'
+                    }`}
+                  >
+                    {tradeLoading ? (
+                      <RefreshCw size={18} className="animate-spin" />
+                    ) : (
+                       <Zap size={18} />
+                    )}
+                    {tradeLoading ? "PROCESSING..." : 
+                     analysis?.signal?.type === 'WAIT' ? "SEND TEST SIGNAL (KONEKSI)" :
+                     !analysis?.signal ? "SCAN FIRST" :
+                     `SEND ${analysis.signal.type} TO BRIDGE`}
+                  </button>
+                  <p className="text-[9px] text-center text-slate-400 mt-2 font-mono uppercase tracking-tighter animate-pulse">
+                    BRIDGE STATUS: ACTIVE & WAITING FOR MT5 POLLING...
+                  </p>
+                </div>
               </div>
 
               {/* Analysis Reason */}
@@ -808,9 +1010,159 @@ const getStructure = (closes: number[]) => {
                     ⚠️ TIER 3 — Setup lemah. Lot kecil, SL ketat, konfirmasi manual dulu di MT5.
                   </div>
                 )}
+
+                {/* Entry Timing Banner */}
+                {analysis?.entryTiming === "GOOD" && analysis?.signal?.type !== "WAIT" && (
+                  <div className="mb-3 p-3 bg-green-500/10 border border-green-500/40 rounded text-green-400 text-[11px] font-bold">
+                    ✅ TIMING ENTRY BAGUS — Bisa eksekusi sekarang
+                    <p className="text-[10px] font-normal mt-1 opacity-80">{analysis.timingNote}</p>
+                  </div>
+                )}
+                {analysis?.entryTiming === "WAIT_PULLBACK" && (
+                  <div className="mb-3 p-3 bg-yellow-500/10 border border-yellow-500/40 rounded text-yellow-400 text-[11px] font-bold">
+                    ⏳ TUNGGU PULLBACK DULU — Jangan kejar harga
+                    <p className="text-[10px] font-normal mt-1 opacity-80">{analysis.timingNote}</p>
+                  </div>
+                )}
+                {analysis?.entryTiming === "WAIT_BREAKOUT" && (
+                  <div className="mb-3 p-3 bg-blue-500/10 border border-blue-500/40 rounded text-blue-400 text-[11px] font-bold">
+                    ⏳ TUNGGU KONFIRMASI BREAKOUT — Belum waktunya
+                    <p className="text-[10px] font-normal mt-1 opacity-80">{analysis.timingNote}</p>
+                  </div>
+                )}
+
                 <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4 tracking-tighter">REASONING & BIAS</h3>
                 <div className="prose prose-invert prose-sm max-w-none text-slate-400 font-medium leading-relaxed">
                   <Markdown remarkPlugins={[remarkGfm]}>{analysis?.reasoning || "Tunggu hasil pemindaian..."}</Markdown>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. LIVE COCKPIT (ACCOUNT TAB) */}
+            <div className={`absolute inset-0 flex flex-col h-full bg-trading-bg z-20 ${mobileActiveTab === 'ACCOUNT' ? 'flex' : 'hidden'}`}>
+              <div className="p-6 border-b border-trading-border bg-trading-panel/50">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-accent/20 rounded-lg text-accent border border-accent/30 shadow-[0_0_15px_rgba(0,255,136,0.2)]">
+                      <Wallet size={20} />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-black italic tracking-tighter text-white">LIVE COCKPIT</h2>
+                      <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">BRIDGE ID: ALPHA-OMEGA-01</p>
+                    </div>
+                  </div>
+                  <div className="px-2 py-1 bg-bull/10 border border-bull/30 rounded flex items-center gap-1.5 animate-pulse">
+                    <div className="w-1.5 h-1.5 rounded-full bg-bull" />
+                    <span className="text-[9px] font-bold text-bull tracking-widest uppercase">SYMBOLS READY</span>
+                  </div>
+                </div>
+
+                {/* Account Summary Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="p-4 bg-trading-bg border border-trading-border rounded-lg">
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">BALANCE</p>
+                    <p className="text-xl font-mono font-bold text-white">${accountData?.balance?.toFixed(2) || "0.00"}</p>
+                  </div>
+                  <div className="p-4 bg-trading-bg border border-trading-border rounded-lg">
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">EQUITY</p>
+                    <p className="text-xl font-mono font-bold text-white">${accountData?.equity?.toFixed(2) || "0.00"}</p>
+                  </div>
+                  <div className="p-4 bg-trading-bg border border-trading-border rounded-lg">
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">PROFIT (LIVE)</p>
+                    <p className={`text-xl font-mono font-bold ${(accountData?.profit || 0) >= 0 ? 'text-bull' : 'text-bear'}`}>
+                      {(accountData?.profit || 0) >= 0 ? '+' : ''}${accountData?.profit?.toFixed(2) || "0.00"}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-trading-bg border border-trading-border rounded-lg">
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">MT5 STATUS</p>
+                    <div className="flex items-center gap-1.5 mt-2">
+                      <div className={`w-2 h-2 rounded-full ${accountData ? 'bg-bull' : 'bg-bear'} shadow-[0_0_8px_rgba(0,255,136,0.5)]`} />
+                      <span className="text-[11px] font-bold text-white uppercase">{accountData ? 'ONLINE' : 'OFFLINE'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* TWO COLUMN CONTENT */}
+              <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                {/* ACTIVE POSITIONS */}
+                <div className="flex-1 border-r border-trading-border flex flex-col overflow-hidden">
+                  <div className="p-4 bg-white/[0.02] border-b border-trading-border flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                       <Target size={14} className="text-accent" />
+                       <h3 className="text-[11px] font-black tracking-widest text-white uppercase">ACTIVE POSITIONS ({positions.length})</h3>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                    {positions.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center opacity-30">
+                        <Activity size={40} className="mb-2" />
+                        <p className="text-[10px] font-mono tracking-widest">DRY MARKET • NO POSITION</p>
+                      </div>
+                    ) : positions.map((p) => (
+                      <div key={p.id} className="bg-trading-panel border border-trading-border rounded-lg p-4 group hover:border-accent/40 transition-all">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`px-2 py-0.5 rounded text-[10px] font-bold ${p.type === 'BUY' ? 'bg-bull/10 text-bull border border-bull/20' : 'bg-bear/10 text-bear border border-bear/20'}`}>
+                              {p.type}
+                            </div>
+                            <div>
+                              <p className="text-xs font-black text-white">{p.symbol} <span className="text-slate-500 font-mono text-[9px] ml-1">#{p.ticket}</span></p>
+                              <p className="text-[10px] font-mono text-slate-400">{p.lots} LOTS @ {p.openPrice}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                             <p className={`text-sm font-mono font-bold ${p.profit >= 0 ? 'text-bull' : 'text-bear'}`}>
+                               {p.profit >= 0 ? '+' : ''}{p.profit?.toFixed(2)} USD
+                             </p>
+                             <button 
+                               onClick={() => closeTrade(p.ticket)}
+                               disabled={tradeLoading}
+                               className="mt-1 text-[9px] font-black text-bear bg-bear/5 border border-bear/20 hover:bg-bear/10 px-3 py-1 rounded transition-all uppercase tracking-tighter flex items-center gap-1 ml-auto"
+                             >
+                               <XCircle size={10} /> CLOSE POSITION
+                             </button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[10px] font-mono border-t border-white/5 pt-3">
+                          <div className="flex flex-col">
+                            <span className="text-slate-600 text-[8px] uppercase">STOP LOSS</span>
+                            <span className="text-bear font-bold">{p.sl || '---'}</span>
+                          </div>
+                          <div className="flex flex-col text-right">
+                            <span className="text-slate-600 text-[8px] uppercase">TAKE PROFIT</span>
+                            <span className="text-bull font-bold">{p.tp || '---'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* TRADE HISTORY */}
+                <div className="w-full md:w-80 flex flex-col overflow-hidden bg-black/20">
+                  <div className="p-4 bg-white/[0.02] border-b border-trading-border flex items-center gap-2">
+                    <HistoryIcon size={14} className="text-slate-400" />
+                    <h3 className="text-[11px] font-black tracking-widest text-slate-400 uppercase">RECENT HISTORY</h3>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                    {history.length === 0 ? (
+                       <p className="text-[10px] text-center mt-10 opacity-30 font-mono italic">EMPTY HISTORY</p>
+                    ) : history.map((h, i) => (
+                      <div key={i} className="bg-white/5 border border-white/5 rounded p-3 text-[11px]">
+                         <div className="flex justify-between mb-1">
+                            <span className="font-bold text-white uppercase">{h.symbol}</span>
+                            <span className={`font-mono font-bold ${h.profit >= 0 ? 'text-bull' : 'text-bear'}`}>
+                               {h.profit >= 0 ? '+' : ''}{h.profit?.toFixed(2)}
+                            </span>
+                         </div>
+                         <div className="flex justify-between text-[9px] text-slate-500 font-mono uppercase tracking-tighter">
+                            <span>#{h.ticket}</span>
+                            <div className="flex items-center gap-1"><Clock size={8} /> {h.closeTime?.split('T')[1]?.substring(0,5) || '..'}</div>
+                         </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -821,7 +1173,8 @@ const getStructure = (closes: number[]) => {
       <nav className="h-16 bg-trading-panel border-t border-trading-border lg:hidden flex items-center justify-around px-4 z-[90] shadow-[0_-5px_15px_rgba(0,0,0,0.5)] flex-shrink-0">
         {[
           { id: 'CHART', icon: <TrendingUp size={20} />, label: 'Market Chart' },
-          { id: 'SIGNAL', icon: <Target size={20} />, label: 'Signal Omega' }
+          { id: 'SIGNAL', icon: <Target size={20} />, label: 'Signal Omega' },
+          { id: 'ACCOUNT', icon: <Wallet size={20} />, label: 'Cockpit' }
         ].map((tab) => (
           <button
             key={tab.id}
