@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { GoogleGenAI, Type } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -187,15 +186,19 @@ const calculateRSI = (closes: number[], period: number = 14) => {
 };
 
 const getStructure = (closes: number[]) => {
-  if(closes.length < 3) return "Ranging";
-  const last = closes[closes.length - 1];
-  const prev = closes[closes.length - 2];
-  const prev2 = closes[closes.length - 3];
-  if (last > prev && prev > prev2) return "BOS UP (HH)";
-  if (last < prev && prev < prev2) return "BOS DOWN (LL)";
-  if (last > prev) return "Minor Rally";
-  if (last < prev) return "Minor Pullback";
-  return "Consolidating";
+  if (closes.length < 10) return "Ranging";
+  const last5 = closes.slice(-5);
+  const prev5 = closes.slice(-10, -5);
+  const lastHigh = Math.max(...last5);
+  const lastLow = Math.min(...last5);
+  const prevHigh = Math.max(...prev5);
+  const prevLow = Math.min(...prev5);
+  
+  if (lastHigh > prevHigh && lastLow > prevLow) return "BOS UP (HH)";
+  if (lastHigh < prevHigh && lastLow < prevLow) return "BOS DOWN (LL)";
+  if (lastHigh > prevHigh && lastLow < prevLow) return "Expansion";
+  if (lastHigh < prevHigh && lastLow > prevLow) return "Consolidating";
+  return "Ranging";
 };
 
   const runAnalysis = async () => {
@@ -224,6 +227,7 @@ const getStructure = (closes: number[]) => {
       let miniTrendPercent = 0; // Expose to fallback logic
       
       const realTimeframes: TimeframeData[] = [];
+      let h1RawKlines: any[] = [];
 
       try {
         // Fetch 24hr ticker
@@ -240,6 +244,7 @@ const getStructure = (closes: number[]) => {
           const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`); // Pull 150 for RSI smoothing accuracy
           if (res.ok) {
             const klines = await res.json();
+            if (interval === '1h') h1RawKlines = klines;
             const closes = klines.map((k: any) => parseFloat(k[4]));
             const rsi = Math.round(calculateRSI(closes, 14)); // This will now use 150 data points for precise Wilder's smoothing
             
@@ -285,64 +290,85 @@ const getStructure = (closes: number[]) => {
       const exactTimeframesStr = JSON.stringify(realTimeframes);
 
       // Core Technical Engine (Mathematical / Rules Based)
-      // Extract specific timeframe data for accurate signalling
-      const currentM15 = realTimeframes.find(t => t.timeframe === 'M15');
-      const currentH1 = realTimeframes.find(t => t.timeframe === 'H1');
-      
+      const h4 = realTimeframes.find(t => t.timeframe === 'H4');
+      const h1 = realTimeframes.find(t => t.timeframe === 'H1');
+      const m15 = realTimeframes.find(t => t.timeframe === 'M15');
+      const m5 = realTimeframes.find(t => t.timeframe === 'M5');
+
       let signalType: "BUY" | "SELL" | "WAIT" = "WAIT";
       let reasoningTxt = "Market konsolidasi. Belum ada setup probabilitas tinggi.";
-      
-      // Real-time rules engine based on RSI and Structure
-      if (currentM15 && currentH1) {
-        // OVERBOUGHT SELL CONDITION
-        if (currentH1.rsi > 60 && currentM15.rsi >= 70 && currentM15.trend.includes('BULL')) {
-           signalType = "SELL";
-           reasoningTxt = `RSI M15 Overbought (${currentM15.rsi}) menabrak momentum tinggi di H1. Terdeteksi zona reversal scalping.`;
-        } 
-        // OVERSOLD BUY CONDITION
-        else if (currentH1.rsi < 40 && currentM15.rsi <= 30 && currentM15.trend.includes('BEAR')) {
-           signalType = "BUY";
-           reasoningTxt = `RSI M15 Oversold ekstrim (${currentM15.rsi}) dengan pelemahan struktur H1. Rejeksi bawah (Bounce) terkonfirmasi.`;
-        } 
-        // ALIGNMENT TREND BUY
-        else if ((currentH1.rsi > 50 && currentH1.rsi < 65) && (currentM15.rsi > 40 && currentM15.rsi < 55) && 
-                 currentH1.trend.includes('BULL') && currentM15.trend.includes('BULL')) {
-           signalType = "BUY";
-           reasoningTxt = "Koreksi wajar di M15 saat H1 Bullish. Setup continuation tren siap dieksekusi.";
-        }
-        // ALIGNMENT TREND SELL
-        else if ((currentH1.rsi < 50 && currentH1.rsi > 35) && (currentM15.rsi < 60 && currentM15.rsi > 45) &&
-                 currentH1.trend.includes('BEAR') && currentM15.trend.includes('BEAR')) {
-           signalType = "SELL";
-           reasoningTxt = "Pullback sementara di M15 pada pola Bearish H1. Momentum ke bawah masih kuat.";
-        }
-        // VOLATILITY SCALPING (fallback to pure math % change)
-        else {
-           if (miniTrendPercent > 0.4) {
-             signalType = "SELL";
-             reasoningTxt = `Volume spike cepat ${miniTrendPercent.toFixed(2)}% di M15. Mencari titik balik koreksi (Mean Reversion).`;
-           } else if (miniTrendPercent < -0.4) {
-             signalType = "BUY";
-             reasoningTxt = `Dump tajam ${miniTrendPercent.toFixed(2)}% di M15 tanpa konfirmasi H4. Peluang pisau jatuh memantul.`;
-           }
+      let bullCount = 0;
+      let bearCount = 0;
+      let avgRsi = 50;
+
+      if (h4 && h1 && m15 && m5) {
+        bullCount = [h4, h1, m15, m5].filter(t => t.trend.includes('BULL')).length;
+        bearCount = [h4, h1, m15, m5].filter(t => t.trend.includes('BEAR')).length;
+        avgRsi = (h1.rsi + m15.rsi) / 2;
+
+        if (bullCount >= 3 && avgRsi < 70) {
+          signalType = "BUY";
+          reasoningTxt = `${bullCount}/4 TF konfirmasi bullish. RSI H1:${h1.rsi} M15:${m15.rsi}. Momentum naik terkonfirmasi.`;
+        } else if (bearCount >= 3 && avgRsi > 30) {
+          signalType = "SELL";
+          reasoningTxt = `${bearCount}/4 TF konfirmasi bearish. RSI H1:${h1.rsi} M15:${m15.rsi}. Momentum turun terkonfirmasi.`;
+        } else if (m15.rsi <= 30 && h4.trend.includes('BULL')) {
+          signalType = "BUY";
+          reasoningTxt = `M15 Oversold (RSI ${m15.rsi}) di tengah tren H4 Bullish. Setup bounce/reversal.`;
+        } else if (m15.rsi >= 70 && h4.trend.includes('BEAR')) {
+          signalType = "SELL";
+          reasoningTxt = `M15 Overbought (RSI ${m15.rsi}) di tengah tren H4 Bearish. Setup rejection/reversal.`;
+        } else {
+          signalType = "WAIT";
+          reasoningTxt = `Signal konflik antar TF. Bull:${bullCount} Bear:${bearCount}. Tunggu konfirmasi lebih jelas.`;
         }
       }
 
-      // Confidence Math
-      let calcConf = Math.min((Math.abs(miniTrendPercent) * 50) + 50, 92);
-      if (signalType === "WAIT") calcConf = 0;
+      // Hitung confidence dari jumlah TF yang align + RSI strength
+      const alignedCount = signalType === "BUY" ? bullCount : signalType === "SELL" ? bearCount : 0;
+      const rsiStrength = signalType === "BUY" 
+        ? Math.max(0, 70 - avgRsi) / 40 
+        : signalType === "SELL" 
+        ? Math.max(0, avgRsi - 30) / 40 
+        : 0;
+      const calcConf = signalType === "WAIT" ? 0 : Math.round(50 + (alignedCount * 10) + (rsiStrength * 20));
+
+      // Hitung ATR 14 dari klines H1
+      const calcATR = (klines: any[], period = 14) => {
+        if (!klines || klines.length < period + 1) return currentPrice * 0.005; // Fallback
+        const trs = klines.slice(-period - 1).map((k: any, i: number, arr: any[]) => {
+          if (i === 0) return parseFloat(k[2]) - parseFloat(k[3]);
+          const high = parseFloat(k[2]);
+          const low = parseFloat(k[3]);
+          const prevClose = parseFloat(arr[i-1][4]);
+          return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        });
+        return trs.reduce((a: number, b: number) => a + b, 0) / period;
+      };
+
+      const atr = calcATR(h1RawKlines);
+      
+      const slRaw = signalType === "BUY" 
+        ? (currentPrice - atr * 1.5).toFixed(1)
+        : (currentPrice + atr * 1.5).toFixed(1);
+      const tp1Raw = signalType === "BUY"
+        ? (currentPrice + atr * 1.5).toFixed(1)
+        : (currentPrice - atr * 1.5).toFixed(1);
+      const tp2Raw = signalType === "BUY"
+        ? (currentPrice + atr * 3).toFixed(1)
+        : (currentPrice - atr * 3).toFixed(1);
 
       const localData: MarketAnalysis = {
         price: currentPrice,
         timeframes: realTimeframes,
         signal: {
           type: signalType,
-          confidence: Math.round(calcConf), 
-          zone: (currentPrice * (signalType === "BUY" ? 0.9985 : signalType === "SELL" ? 1.0015 : 1)).toFixed(1),
-          sl: (currentPrice * (signalType === "BUY" ? 0.995 : 1.005)).toFixed(1),
-          tp1: (currentPrice * (signalType === "BUY" ? 1.003 : 0.997)).toFixed(1),
-          tp2: (currentPrice * (signalType === "BUY" ? 1.008 : 0.992)).toFixed(1),
-          rr: "1:2.5"
+          confidence: calcConf, 
+          zone: currentPrice.toFixed(1), // Entry at market price logic
+          sl: parseFloat(slRaw),
+          tp1: parseFloat(tp1Raw),
+          tp2: parseFloat(tp2Raw),
+          rr: "1:2"
         },
         reasoning: reasoningTxt,
         checkpoints: [
