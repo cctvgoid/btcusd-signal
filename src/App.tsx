@@ -373,26 +373,24 @@ const getStructure = (closes: number[]) => {
 
         // Fetch real-time klines for multiple timeframes to calculate exact RSI and Structure
         const fetchTF = async (interval: string, tfLabel: string) => {
-          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`); // Pull 150 for RSI smoothing accuracy
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`); 
           if (res.ok) {
             const klines = await res.json();
             if (interval === '1h') h1RawKlines = klines;
             const closes = klines.map((k: any) => parseFloat(k[4]));
-            const rsi = Math.round(calculateRSI(closes, 14)); // This will now use 150 data points for precise Wilder's smoothing
+            const rsi = Math.round(calculateRSI(closes, 14));
             
             const ema20 = calculateEMA(closes, 20);
             const ema50 = calculateEMA(closes, 50);
             const lastClose = closes[closes.length - 1];
-            const distFromEMA20 = ((lastClose - ema20) / ema20) * 100; // % jarak dari EMA20
+            const distFromEMA20 = ((lastClose - ema20) / ema20) * 100;
 
-            // For trend mapping, extract only the last 50 periods
-            const recentCloses = closes.slice(-50);
-            const first = recentCloses[0];
-            const last = recentCloses[recentCloses.length - 1];
-            const trendPct = ((last - first) / first) * 100;
-            const trendStr = trendPct > 0.5 ? "STRONG BULL" : trendPct > 0 ? "BULLISH" : trendPct < -0.5 ? "STRONG BEAR" : "BEARISH";
+            const trendStr = ema20 > ema50
+              ? (((ema20 - ema50) / ema50) * 100 > 0.3 ? "STRONG BULL" : "BULLISH")
+              : (((ema50 - ema20) / ema50) * 100 > 0.3 ? "STRONG BEAR" : "BEARISH");
+
             const rsiState = rsi > 70 ? "Overbought" : rsi < 30 ? "Oversold" : rsi > 55 ? "Bullish" : rsi < 45 ? "Bearish" : "Neutral";
-            const structure = getStructure(recentCloses);
+            const structure = getStructure(closes.slice(-50));
             
             realTimeframes.push({
               timeframe: tfLabel,
@@ -406,8 +404,7 @@ const getStructure = (closes: number[]) => {
             });
             
             if (interval === '15m') {
-              miniTrendPercent = trendPct;
-              shortTermTrendInfo = `DATA KLINES 1 JAM TERAKHIR: Trend M15 bergerak sebesar ${miniTrendPercent.toFixed(2)}%. Closes (4 candle 15m terakhir): ${closes.slice(-4).join(', ')}.`;
+              shortTermTrendInfo = `DATA KLINES 1 JAM TERAKHIR: Trend M15 RSI:${rsi}. Closes (4 candle 15m terakhir): ${closes.slice(-4).join(', ')}.`;
             }
           }
         };
@@ -457,22 +454,22 @@ const getStructure = (closes: number[]) => {
           tier = 0;
           reasoningTxt = `H4 SIDEWAYS (${h4.structure}). Tidak ada arah dominan. DILARANG ENTRY sampai H4 konfirmasi trend.`;
         }
-        // H4 BULLISH — hanya cari BUY
+        // H4 BULLISH
         else if (h4Bullish) {
           // TIER 1: 4/4 TF Bullish
           if (bullCount === 4 && avgRsi < 68) {
             signalType = "BUY"; tier = 1;
             reasoningTxt = `TIER 1 — 4/4 TF Bullish. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup terkuat, full momentum.`;
           }
-          // TIER 2: 3/4 TF Bullish, H4 sudah konfirmasi
-          else if (bullCount === 3 && avgRsi < 70) {
+          // TIER 2: >= 2 bull + H1 konfirmasi (BUG #3)
+          else if (bullCount >= 2 && h1.trend.includes('BULL') && avgRsi < 68) {
             signalType = "BUY"; tier = 2;
-            reasoningTxt = `TIER 2 — 3/4 TF Bullish, H4 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
+            reasoningTxt = `TIER 2 — ${bullCount}/4 TF Bullish, H1 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
           }
-          // TIER 3: H4 Bullish + M15 Oversold ekstrim = bounce
-          else if (m15.rsi <= 28 && h1.rsi < 45) {
-            signalType = "BUY"; tier = 3;
-            reasoningTxt = `TIER 3 — H4 Bullish + M15 Oversold RSI:${m15.rsi}. Setup bounce, gunakan SL ketat.`;
+          // SELL saat H4 Bullish (BUG #2)
+          else if (bearCount >= 3 && m15.rsi >= 62 && h1.rsi >= 55) {
+            signalType = "SELL"; tier = 3;
+            reasoningTxt = `TIER 3 COUNTER — Koreksi dalam tren H4 Bull. Bear TF: ${bearCount}/4. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup pullback sell, gunakan SL ketat.`;
           }
           // H4 Bullish tapi TF lain belum konfirmasi
           else {
@@ -480,22 +477,22 @@ const getStructure = (closes: number[]) => {
             reasoningTxt = `H4 Bullish tapi TF kecil belum konfirmasi arah. Bull:${bullCount}/4. Tunggu setup bersih.`;
           }
         }
-        // H4 BEARISH — hanya cari SELL
+        // H4 BEARISH
         else if (h4Bearish) {
           // TIER 1: 4/4 TF Bearish
           if (bearCount === 4 && avgRsi > 32) {
             signalType = "SELL"; tier = 1;
             reasoningTxt = `TIER 1 — 4/4 TF Bearish. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup terkuat, full momentum.`;
           }
-          // TIER 2: 3/4 TF Bearish, H4 sudah konfirmasi
-          else if (bearCount === 3 && avgRsi > 30) {
+          // TIER 2: >= 2 bear + H1 konfirmasi (BUG #3)
+          else if (bearCount >= 2 && h1.trend.includes('BEAR') && avgRsi > 32) {
             signalType = "SELL"; tier = 2;
-            reasoningTxt = `TIER 2 — 3/4 TF Bearish, H4 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
+            reasoningTxt = `TIER 2 — ${bearCount}/4 TF Bearish, H1 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
           }
-          // TIER 3: H4 Bearish + M15 Overbought ekstrim = rejection
-          else if (m15.rsi >= 72 && h1.rsi > 55) {
-            signalType = "SELL"; tier = 3;
-            reasoningTxt = `TIER 3 — H4 Bearish + M15 Overbought RSI:${m15.rsi}. Setup rejection, gunakan SL ketat.`;
+          // BUY saat H4 Bear (BUG #2)
+          else if (bullCount >= 3 && m15.rsi <= 38 && h1.rsi <= 45) {
+            signalType = "BUY"; tier = 3;
+            reasoningTxt = `TIER 3 COUNTER — Bounce dalam tren H4 Bear. Bull TF: ${bullCount}/4. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup bounce buy, gunakan SL ketat.`;
           }
           // H4 Bearish tapi TF lain belum konfirmasi
           else {
@@ -557,18 +554,31 @@ const getStructure = (closes: number[]) => {
       };
 
       const atr = calcATR(h1RawKlines);
+      const atrPercent = (atr / currentPrice) * 100;
+      const highVolatility = atrPercent > 1.5; // ATR > 1.5% dari harga
 
       // SL/TP multiplier berdasarkan tier
       const slMult  = tier === 1 ? 2.0 : tier === 2 ? 1.5 : 1.0;
       const tp1Mult = tier === 1 ? 2.0 : tier === 2 ? 1.5 : 1.0;
       const tp2Mult = tier === 1 ? 4.0 : tier === 2 ? 3.0 : 2.0;
 
-      const slRaw  = signalType === "BUY" ? (currentPrice - atr * slMult).toFixed(1)  : (currentPrice + atr * slMult).toFixed(1);
-      const tp1Raw = signalType === "BUY" ? (currentPrice + atr * tp1Mult).toFixed(1) : (currentPrice - atr * tp1Mult).toFixed(1);
-      const tp2Raw = signalType === "BUY" ? (currentPrice + atr * tp2Mult).toFixed(1) : (currentPrice - atr * tp2Mult).toFixed(1);
+      if (highVolatility) {
+        timingNote += ` ⚠️ VOLATILITAS TINGGI (ATR ${atrPercent.toFixed(1)}%) — Kurangi lot size 50%.`;
+      }
+
+      const entryZone = 
+        entryTiming === "WAIT_PULLBACK" && m15
+          ? m15.ema20.toFixed(1)  // Entry di EMA20 M15 saat pullback
+          : currentPrice.toFixed(1); // Entry market saat timing GOOD
+
+      const slRaw  = signalType === "BUY" ? (parseFloat(entryZone) - atr * slMult).toFixed(1)  : (parseFloat(entryZone) + atr * slMult).toFixed(1);
+      const tp1Raw = signalType === "BUY" ? (parseFloat(entryZone) + atr * tp1Mult).toFixed(1) : (parseFloat(entryZone) - atr * tp1Mult).toFixed(1);
+      const tp2Raw = signalType === "BUY" ? (parseFloat(entryZone) + atr * tp2Mult).toFixed(1) : (parseFloat(entryZone) - atr * tp2Mult).toFixed(1);
 
       // Confidence berdasarkan tier
-      const calcConf = tier === 1 ? 92 : tier === 2 ? 75 : tier === 3 ? 62 : 0;
+      const bullPct = h4 && h1 && m15 && m5 ? Math.round((bullCount / 4) * 100) : 0;
+      const bearPct = 100 - bullPct;
+      const calcConf = tier === 1 ? 92 : tier === 2 ? 75 : tier === 3 ? 62 : Math.max(bullPct, bearPct);
 
       const localData: MarketAnalysis = {
         price: currentPrice,
@@ -577,7 +587,7 @@ const getStructure = (closes: number[]) => {
           type: signalType,
           tier: tier,
           confidence: calcConf, 
-          zone: currentPrice.toFixed(1), // Entry at market price logic
+          zone: entryZone,
           sl: parseFloat(slRaw).toFixed(1),
           tp1: parseFloat(tp1Raw).toFixed(1),
           tp2: parseFloat(tp2Raw).toFixed(1),
@@ -626,7 +636,7 @@ const getStructure = (closes: number[]) => {
 
         const realTimeframes: TimeframeData[] = [];
         const fetchTF = async (interval: string, tfLabel: string) => {
-          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`); // Fix: Limit 150
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`); 
           if (res.ok) {
             const klines = await res.json();
             const closes = klines.map((k: any) => parseFloat(k[4]));
@@ -634,18 +644,24 @@ const getStructure = (closes: number[]) => {
             
             const ema20 = calculateEMA(closes, 20);
             const ema50 = calculateEMA(closes, 50);
-            const lastClose = closes[closes.length - 1];
-            const distFromEMA20 = ((lastClose - ema20) / ema20) * 100; // % jarak dari EMA20
 
-            const recentCloses = closes.slice(-50);
-            const first = recentCloses[0];
-            const last = recentCloses[recentCloses.length - 1];
-            const trendPct = ((last - first) / first) * 100;
-            const trendStr = trendPct > 0.5 ? "STRONG BULL" : trendPct > 0 ? "BULLISH" : trendPct < -0.5 ? "STRONG BEAR" : "BEARISH";
+            const trendStr = ema20 > ema50
+              ? (((ema20 - ema50) / ema50) * 100 > 0.3 ? "STRONG BULL" : "BULLISH")
+              : (((ema50 - ema20) / ema50) * 100 > 0.3 ? "STRONG BEAR" : "BEARISH");
+
             const rsiState = rsi > 70 ? "Overbought" : rsi < 30 ? "Oversold" : rsi > 55 ? "Bullish" : rsi < 45 ? "Bearish" : "Neutral";
-            const structure = getStructure(recentCloses);
+            const structure = getStructure(closes.slice(-50));
             
-            realTimeframes.push({ timeframe: tfLabel, trend: trendStr, rsi, rsiState, structure, ema20, ema50, distFromEMA20 });
+            realTimeframes.push({ 
+              timeframe: tfLabel, 
+              trend: trendStr, 
+              rsi, 
+              rsiState, 
+              structure, 
+              ema20, 
+              ema50, 
+              distFromEMA20: (((closes[closes.length - 1] - ema20) / ema20) * 100) 
+            });
           }
         };
 
