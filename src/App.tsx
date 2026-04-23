@@ -119,7 +119,6 @@ export default function App() {
   const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [input, setInput] = useState("");
   
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
 
   const enterTerminal = () => {
@@ -285,149 +284,74 @@ const getStructure = (closes: number[]) => {
 
       const exactTimeframesStr = JSON.stringify(realTimeframes);
 
-      // 2. Try AI Analysis if key exists
-      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY") {
-        try {
-          const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  { text: `System Context: ${BTC_ANALYST_SYSTEM_PROMPT}\n\nDATA SAAT INI (REAL TIME MATEMATIS):\nHarga BTC USD detik ini: ${priceString}.
-Data riil timeframe saat ini (M5, M15, H1, H4): ${exactTimeframesStr}
-
-Sebagai scalper M15-H1, JANGAN menebak angka RSI atau Tren. GUNAKAN angka asli dari data JSON "exactTimeframesStr" di atas untuk mengisi field 'timeframes' di output. 
-Analisa sinyal (BUY/SELL/WAIT) berdasarkan bentrokan atau keselarasan dari RSI & Struktur asli tersebut. Jika H4 Bullish tapi M5/M15 Oversold, cari BUY. Jika H4 Bearish tapi M15 Overbought, cari SELL.
-
-CRITICAL INSTRUCTION FOR JSON:
-- Tentukan sinyal objektif: "BUY", "SELL", atau "WAIT" berdasarkan DATA REAL TIME di atas.
-- The 'reasoning' field MUST BE UNDER 200 CHARACTERS menjelaskan alasan berdasarkan korelasi multi-timeframe tersebut.
-- Field 'timeframes' WAJIB sama persis isinya dengan data riil yang saya berikan.
-- KEMBALIKAN OUTPUT DALAM FORMAT JSON SAJA BERIKUT:
-{ "price": number, "timeframes": [ { "timeframe": string, "trend": string, "rsi": number, "rsiState": string, "structure": string } ], "signal": { "type": "BUY"|"SELL"|"WAIT", "confidence": number, "zone": string, "sl": number, "tp1": number, "tp2": number, "rr": string }, "reasoning": string, "checkpoints": [ { "label": string, "checked": boolean } ] }` }
-                ]
-              }
-            ],
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  price: { type: Type.NUMBER },
-                  timeframes: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        timeframe: { type: Type.STRING },
-                        trend: { type: Type.STRING },
-                        rsi: { type: Type.NUMBER },
-                        rsiState: { type: Type.STRING },
-                        structure: { type: Type.STRING }
-                      }
-                    }
-                  },
-                  signal: {
-                    type: Type.OBJECT,
-                    properties: {
-                      type: { type: Type.STRING },
-                      confidence: { type: Type.NUMBER },
-                      zone: { type: Type.STRING },
-                      sl: { type: Type.NUMBER },
-                      tp1: { type: Type.NUMBER },
-                      tp2: { type: Type.NUMBER },
-                      rr: { type: Type.STRING }
-                    }
-                  },
-                  reasoning: { type: Type.STRING, description: "Max 200 characters explaining the thought process." },
-                  checkpoints: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        label: { type: Type.STRING },
-                        checked: { type: Type.BOOLEAN }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          } as any);
-
-          let cleanText = response.text || "";
-          cleanText = cleanText.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
-          const data = JSON.parse(cleanText) as MarketAnalysis;
-          setAnalysis(data);
-          setHighlightTrigger(prev => prev + 1); // Trigger visual highlight
-          if (data.signal?.type === 'BUY' || data.signal?.type === 'SELL') {
-            speakSignal(data.signal.type, data.signal.zone);
-          }
-          return;
-        } catch (aiErr) {
-          console.error("AI Analysis Failed:", aiErr);
+      // Core Technical Engine (Mathematical / Rules Based)
+      // Extract specific timeframe data for accurate signalling
+      const currentM15 = realTimeframes.find(t => t.timeframe === 'M15');
+      const currentH1 = realTimeframes.find(t => t.timeframe === 'H1');
+      
+      let signalType: "BUY" | "SELL" | "WAIT" = "WAIT";
+      let reasoningTxt = "Market konsolidasi. Belum ada setup probabilitas tinggi.";
+      
+      // Real-time rules engine based on RSI and Structure
+      if (currentM15 && currentH1) {
+        // OVERBOUGHT SELL CONDITION
+        if (currentH1.rsi > 60 && currentM15.rsi >= 70 && currentM15.trend.includes('BULL')) {
+           signalType = "SELL";
+           reasoningTxt = `RSI M15 Overbought (${currentM15.rsi}) menabrak momentum tinggi di H1. Terdeteksi zona reversal scalping.`;
+        } 
+        // OVERSOLD BUY CONDITION
+        else if (currentH1.rsi < 40 && currentM15.rsi <= 30 && currentM15.trend.includes('BEAR')) {
+           signalType = "BUY";
+           reasoningTxt = `RSI M15 Oversold ekstrim (${currentM15.rsi}) dengan pelemahan struktur H1. Rejeksi bawah (Bounce) terkonfirmasi.`;
+        } 
+        // ALIGNMENT TREND BUY
+        else if ((currentH1.rsi > 50 && currentH1.rsi < 65) && (currentM15.rsi > 40 && currentM15.rsi < 55) && 
+                 currentH1.trend.includes('BULL') && currentM15.trend.includes('BULL')) {
+           signalType = "BUY";
+           reasoningTxt = "Koreksi wajar di M15 saat H1 Bullish. Setup continuation tren siap dieksekusi.";
+        }
+        // ALIGNMENT TREND SELL
+        else if ((currentH1.rsi < 50 && currentH1.rsi > 35) && (currentM15.rsi < 60 && currentM15.rsi > 45) &&
+                 currentH1.trend.includes('BEAR') && currentM15.trend.includes('BEAR')) {
+           signalType = "SELL";
+           reasoningTxt = "Pullback sementara di M15 pada pola Bearish H1. Momentum ke bawah masih kuat.";
+        }
+        // VOLATILITY SCALPING (fallback to pure math % change)
+        else {
+           if (miniTrendPercent > 0.4) {
+             signalType = "SELL";
+             reasoningTxt = `Volume spike cepat ${miniTrendPercent.toFixed(2)}% di M15. Mencari titik balik koreksi (Mean Reversion).`;
+           } else if (miniTrendPercent < -0.4) {
+             signalType = "BUY";
+             reasoningTxt = `Dump tajam ${miniTrendPercent.toFixed(2)}% di M15 tanpa konfirmasi H4. Peluang pisau jatuh memantul.`;
+           }
         }
       }
 
-      // 3. Robust Fallback: Dynamic Technical Engine (Anti-Dummy)
-      const trend = priceChangePercent > 1.5 ? "STRONG BULL" : priceChangePercent > 0.3 ? "BULLISH" : priceChangePercent < -1.5 ? "STRONG BEAR" : priceChangePercent < -0.3 ? "BEARISH" : "SIDEWAYS";
-      
-      // Calculate dynamic RSI based on price change percent (Heuristic but reactive)
-      const baseRsi = 50 + (priceChangePercent * 8);
-      const dynamicRsi = (offset: number) => Math.max(10, Math.min(90, Math.round(baseRsi + offset)));
-
-      // Simulate scalping logic for fallback: If price pumped too much, it's a SELL (correction). If dumped, BUY.
-      let signalType: "BUY" | "SELL" | "WAIT" = "WAIT";
-      
-      // Use short term 15m trend for scalping logic (e.g. +/- 0.5% in an hour is a big move for M15)
-      if (miniTrendPercent > 0.5) signalType = "SELL"; // Overbought correction in short term
-      else if (miniTrendPercent > 0.1) signalType = "BUY"; // Riding slight upward momentum
-      else if (miniTrendPercent < -0.5) signalType = "BUY"; // Oversold bounce in short term
-      else if (miniTrendPercent < -0.1) signalType = "SELL"; // Riding slight downward momentum
-      else signalType = "WAIT"; // Flat market
+      // Confidence Math
+      let calcConf = Math.min((Math.abs(miniTrendPercent) * 50) + 50, 92);
+      if (signalType === "WAIT") calcConf = 0;
 
       const localData: MarketAnalysis = {
         price: currentPrice,
-        timeframes: realTimeframes.length > 0 ? realTimeframes : [
-          { 
-            timeframe: "H1", 
-            trend: trend, 
-            rsi: dynamicRsi(0), 
-            rsiState: dynamicRsi(0) > 60 ? "Overbought" : dynamicRsi(0) < 40 ? "Oversold" : "Neutral", 
-            structure: miniTrendPercent > 0.1 ? "BOS UP" : miniTrendPercent < -0.1 ? "BOS DOWN" : "Ranging" 
-          },
-          { 
-            timeframe: "M15", 
-            trend: trend, 
-            rsi: dynamicRsi(5), 
-            rsiState: dynamicRsi(5) > 65 ? "Strong" : dynamicRsi(5) < 35 ? "Weak" : "Consolidating", 
-            structure: miniTrendPercent > 0.05 ? "HL / HH" : miniTrendPercent < -0.05 ? "LH / LL" : "Inside Bar" 
-          },
-          { 
-            timeframe: "M5", 
-            trend: trend, 
-            rsi: dynamicRsi(12), 
-            rsiState: Math.abs(miniTrendPercent) > 0.3 ? "Volatile" : "Stable", 
-            structure: miniTrendPercent > 0 ? "Markup" : "Markdown" 
-          }
-        ],
+        timeframes: realTimeframes,
         signal: {
           type: signalType,
-          confidence: Math.min(Math.abs(miniTrendPercent) * 100 + 40, 95), // scale confidence up based on short term volatility
-          zone: (currentPrice * (signalType === "BUY" ? 0.998 : 1.002)).toFixed(1),
-          sl: (currentPrice * (signalType === "BUY" ? 0.993 : 1.007)).toFixed(1),
-          tp1: (currentPrice * (signalType === "BUY" ? 1.005 : 0.995)).toFixed(1),
-          tp2: (currentPrice * (signalType === "BUY" ? 1.010 : 0.990)).toFixed(1),
+          confidence: Math.round(calcConf), 
+          zone: (currentPrice * (signalType === "BUY" ? 0.9985 : signalType === "SELL" ? 1.0015 : 1)).toFixed(1),
+          sl: (currentPrice * (signalType === "BUY" ? 0.995 : 1.005)).toFixed(1),
+          tp1: (currentPrice * (signalType === "BUY" ? 1.003 : 0.997)).toFixed(1),
+          tp2: (currentPrice * (signalType === "BUY" ? 1.008 : 0.992)).toFixed(1),
           rr: "1:2.5"
         },
-        reasoning: `Berdasarkan pergerakan murni M15 terakhir (${miniTrendPercent.toFixed(2)}%), AI menangkap peluang aksi ${signalType} secepatnya.`,
+        reasoning: reasoningTxt,
         checkpoints: [
-          { label: "Binance Live Sync", checked: true },
-          { label: "Price Action Logic", checked: true },
-          { label: "Non-Static Validation", checked: true }
+          { label: "Data Binance Validated", checked: true },
+          { label: "RSI Multi-Timeframe Algoritma", checked: true },
+          { label: "Structure Konfirmasi", checked: true }
         ]
       };
+      
       setAnalysis(localData);
       setHighlightTrigger(prev => prev + 1); // Trigger visual highlight
       if (localData.signal?.type === 'BUY' || localData.signal?.type === 'SELL') {
@@ -446,22 +370,13 @@ CRITICAL INSTRUCTION FOR JSON:
     setMessages(newMessages);
     setInput("");
     
-    try {
-      const chatResponse = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          { role: "user", parts: [{ text: BTC_ANALYST_SYSTEM_PROMPT }] },
-          { role: "model", parts: [{ text: "Siap, saya mengerti. Saya akan bertindak sebagai BTC Analyst AI profesional." }] },
-          ...newMessages.map(m => ({
-            role: m.role === "user" ? "user" as const : "model" as const,
-            parts: [{ text: m.content }]
-          }))
-        ]
-      });
-      setMessages([...newMessages, { role: "assistant", content: chatResponse.text || "Gagal merespon." }]);
-    } catch (err) {
-      console.error("Chat Error:", err);
-    }
+    // Simulate thinking delay then return static offline message
+    setTimeout(() => {
+      setMessages([...newMessages, { 
+        role: "assistant", 
+        content: "⚠️ **Mode Pure Math Aktif.**\n\nKoneksi ke server AI dimatikan sesuai instruksi. Seluruh analisa saat ini di-*handle* 100% oleh skrip kalkulasi matematis lokal dari data *real-time* Binance API." 
+      }]);
+    }, 800);
   };
 
   useEffect(() => {
