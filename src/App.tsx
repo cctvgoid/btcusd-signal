@@ -466,6 +466,11 @@ const getStructure = (closes: number[]) => {
             signalType = "BUY"; tier = 2;
             reasoningTxt = `TIER 2 — ${bullCount}/4 TF Bullish, H1 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
           }
+          // TIER 3: H4 Bullish + M15 Oversold ekstrim = bounce
+          else if (m15.rsi <= 28 && h1.rsi < 45) {
+            signalType = "BUY"; tier = 3;
+            reasoningTxt = `TIER 3 — H4 Bullish + M15 Oversold RSI:${m15.rsi}. Setup bounce, gunakan SL ketat.`;
+          }
           // SELL saat H4 Bullish (BUG #2)
           else if (bearCount >= 3 && m15.rsi >= 62 && h1.rsi >= 55) {
             signalType = "SELL"; tier = 3;
@@ -488,6 +493,11 @@ const getStructure = (closes: number[]) => {
           else if (bearCount >= 2 && h1.trend.includes('BEAR') && avgRsi > 32) {
             signalType = "SELL"; tier = 2;
             reasoningTxt = `TIER 2 — ${bearCount}/4 TF Bearish, H1 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
+          }
+          // TIER 3: H4 Bearish + M15 Overbought ekstrim = rejection
+          else if (m15.rsi >= 72 && h1.rsi > 55) {
+            signalType = "SELL"; tier = 3;
+            reasoningTxt = `TIER 3 — H4 Bearish + M15 Overbought RSI:${m15.rsi}. Setup rejection, gunakan SL ketat.`;
           }
           // BUY saat H4 Bear (BUG #2)
           else if (bullCount >= 3 && m15.rsi <= 38 && h1.rsi <= 45) {
