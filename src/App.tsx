@@ -785,6 +785,21 @@ const getStructure = (closes: number[]) => {
         </div>
 
         <div className="flex items-center gap-3 md:gap-8">
+          <div className="hidden lg:flex items-center bg-black/20 p-1 rounded-lg border border-white/5 mr-4">
+            <button 
+              onClick={() => setMobileActiveTab('SIGNAL')}
+              className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${mobileActiveTab !== 'ACCOUNT' ? 'bg-accent text-black shadow-lg shadow-accent/20' : 'text-slate-500 hover:text-white'}`}
+            >
+              MARKET ANALYSIS
+            </button>
+            <button 
+              onClick={() => setMobileActiveTab('ACCOUNT')}
+              className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition-all flex items-center gap-2 ${mobileActiveTab === 'ACCOUNT' ? 'bg-accent text-black shadow-lg shadow-accent/20' : 'text-slate-500 hover:text-white'}`}
+            >
+              <Wallet size={12} /> COCKPIT [MT5]
+            </button>
+          </div>
+
           <div className="text-right hidden sm:block">
             <p className="text-[10px] uppercase tracking-widest font-bold opacity-40">BTC PRICE</p>
             <p className="text-sm md:text-xl font-mono font-black text-white tracking-tighter">
@@ -1037,6 +1052,7 @@ const getStructure = (closes: number[]) => {
                 </div>
               </div>
             </div>
+          </div>
 
             {/* 2. LIVE COCKPIT (ACCOUNT TAB) */}
             <div className={`absolute inset-0 flex flex-col h-full bg-trading-bg z-20 ${mobileActiveTab === 'ACCOUNT' ? 'flex' : 'hidden'}`}>
